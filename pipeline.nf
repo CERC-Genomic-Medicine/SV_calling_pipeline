@@ -98,7 +98,6 @@ process MantaSV {
  }
 
 
-
 workflow {
    
    inputFiles = Channel.fromPath(params.inputFilesSubsetFourteen).map{file -> [file.getSimpleName(), file, file + ".crai"]}
