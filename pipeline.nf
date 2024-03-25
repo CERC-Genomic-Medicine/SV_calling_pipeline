@@ -1,19 +1,11 @@
 #!/usr/bin/env nextflow 
 
-// Before running this script load samtools:
-// module load samtools
-// module load bcftools
-// module load delly
-// module load gcc
-// module load manta
-
-
 process DellySV {
 // call Delly, compress and index resulting file 
    cache "lenient"
-   cpus 1
-   memory "8 GB"
-   time "8h"
+   cpus 6
+   memory "20 GB"
+   time "48h"
 
    input:
    tuple val(input_label), file(cram), file(crai)
@@ -21,7 +13,7 @@ process DellySV {
    output:
    tuple val("${input_label}"), file("${input_label}.delly.vcf.gz"), file("${input_label}.delly.vcf.gz.tbi")
 
-   publishDir "${params.result}/dellySampleSubset", pattern: '*.vcf.gz*', mode: 'copy'
+   publishDir "${params.result}/delly", pattern: '*.vcf.gz*', mode: 'copy'
 
    script:    
    """
@@ -31,51 +23,13 @@ process DellySV {
    """
 } 
 
-process FilterDellySV {
-   cache "lenient"
-   cpus 1
-   memory "4 GB"
-   time "2h"
-
-   input:
-   tuple val(input_label), file(delly_sv_vcf), file(delly_sv_vcf_tbi)
-   
-   publishDir "${params.result}/FilterSampleSubset"
-
-   output:
-   tuple path("${input_label}.delly.vcf.filt*"), val(input_label)
-
-   //filter the vcf file to remove any SVs smaller than 50 bp and any SVs without 'PASS'
-   // separate the vcf file into different files by SVTYPE
-
-   script:
-   """
-      variants=("BND" "DEL" "DUP" "INS" "INV")
-
-        bcftools view ${delly_sv_vcf} -r chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY > ${input_label}.delly01.vcf      
-        ${params.survivor} filter ${input_label}.delly01.vcf NA 50 -1 0 -1 ${input_label}.delly02.vcf
-        awk -F '\t' '{if(\$0 ~ "#") print; else if(\$7 == "PASS") print}' ${input_label}.delly02.vcf > ${input_label}.delly03.vcf
-        bcftools query -l ${input_label}.delly03.vcf | awk '{ print \$1, "'"delly"'_"\$1 }' > new_sample_names.txt
-        bcftools reheader --samples new_sample_names.txt ${input_label}.delly03.vcf > ${input_label}.delly04.vcf
-
-
-        sed 's/SVTYPE=DUP/SVTYPE=INS/' ${input_label}.delly04.vcf | grep -E '^#|SVTYPE=INS' > ${input_label}.delly.vcf.filt.DUPtoINS
-         
-        for val in \${variants[@]}; 
-        do
-            grep -E '^#|SVTYPE='"\${val}" ${input_label}.delly04.vcf > ${input_label}.delly.vcf.filt.\${val}
-        done
-   """
-
-}
-
 
 process MantaSV {
 
    cache "lenient"
    cpus 4
-   memory "4 GB"
-   time "8h"
+   memory "8 GB"
+   time "12h"
 
 
    input:
@@ -84,61 +38,71 @@ process MantaSV {
    output:
    tuple val(input_label), path("${input_label}.manta.vcf.gz"), path("${input_label}.manta.vcf.gz.tbi")
 
-   publishDir "${params.result}/mantaSampleSubset" 
+   publishDir "${params.result}/manta", pattern: '*.vcf.gz*', mode: 'copy'
 
    """
-
-   configManta.py --bam ${cram} --referenceFasta ${params.referenceGenome}
-   ./MantaWorkflow/runWorkflow.py -j 4
-   mv ./MantaWorkflow/results/variants/diploidSV.vcf.gz ${input_label}.manta.vcf.gz
-   bcftools index -t ${input_label}.manta.vcf.gz 
+   # call manta, restricted to ref regions included in bed file 
+   ${params.manta}/bin/configManta.py --bam ${cram} --referenceFasta ${params.referenceGenome} --callRegions ${params.referenceDir}/GRCh38.include.bed.gz
+   # execute script with specified job count equal to 4 
+   ./runWorkflow.py -j 4
+   
+   # analysis of BNDs to determine INVs, output = vcf
+   ${params.manta}/libexec/convertInversion.py ${params.manta}/libexec/samtools ${params.referenceGenome} ./MantaWorkflow/results/variants/diploidSV.vcf.gz > ${input_label}.manta.vcf
+   
+   #compression to vcf.gz 
+   bcftools view ${input_label}.manta.vcf -Oz -o ${input_label}.manta.vcf.gz
+   
+   #tabix indexation
+   bcftools index -t ${input_label}.manta.vcf.gz
    """
 }
 
-process FilterMantaSV {
-// filter the vcf file to remove any SVs smaller than 50 bp and any SVs without 'PASS'
-// separate the vcf file into different files by SVTYPE
+
+
+
+ process LumpySV {
 
    cache "lenient"
-   cpus 1
-   memory "4 GB"
-   time "2h"
+   cpus 4
+   memory "16 GB"
+   time "12h"
+   scratch '$SLURM_TMPDIR'
+  
 
    input:
-   tuple val(input_label), path(manta_sv_vcf), path(manta_sv_vcf_tbi)
-   
-   publishDir "${params.result}/FilterSampleSubset"
+   tuple val(input_label), file(cram), file(crai)
 
    output:
-   tuple path("${input_label}.manta.vcf.filt*"), val(input_label)
+   tuple val(input_label), path("${input_label}.lumpy.vcf.gz"), path("${input_label}.lumpy.vcf.gz.tbi")
 
-   script:
+   publishDir "${params.result}/lumpy", pattern: '*.vcf.gz*', mode: 'copy'
+
+   script: 
    """
-      variants=("BND" "DEL" "DUP" "INS" "INV")
+   chrom=chr{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,X,Y}
 
-        bcftools view ${manta_sv_vcf} -r chr1,chr2,chr3,chr4,chr5,chr6,chr7,chr8,chr9,chr10,chr11,chr12,chr13,chr14,chr15,chr16,chr17,chr18,chr19,chr20,chr21,chr22,chrX,chrY > ${input_label}.manta01.vcf      
-        ${params.survivor} filter ${input_label}.manta01.vcf NA 50 -1 0 -1 ${input_label}.manta02.vcf
-        awk -F '\t' '{if(\$0 ~ "#") print; else if(\$7 == "PASS") print}' ${input_label}.manta02.vcf > ${input_label}.manta03.vcf
-        bcftools query -l ${input_label}.manta03.vcf | awk '{ print \$1, "'"manta"'_"\$1 }' > new_sample_namesmanta.txt
-        bcftools reheader --samples new_sample_namesmanta.txt ${input_label}.manta03.vcf > ${input_label}.manta04.vcf
+   samtools view -h -b -F 1294 ${cram} \${chrom} > ${input_label}.discordant.unsorted.bam
+   
+   samtools view -h ${cram} \${chrom} | ${params.lumpy}/scripts/extractSplitReads_BwaMem -i stdin | samtools view -Sb - > ${input_label}.splitters.unsorted.bam
+   
+   samtools sort -o ${input_label}.discordant.bam ${input_label}.discordant.unsorted.bam
+   samtools sort -o ${input_label}.splitters.bam ${input_label}.splitters.unsorted.bam 
 
-
-        sed 's/SVTYPE=DUP/SVTYPE=INS/' ${input_label}.manta04.vcf | grep -E '^#|SVTYPE=INS' > ${input_label}.manta.vcf.filt.DUPtoINS
-         
-        for val in \${variants[@]}; 
-        do
-            grep -E '^#|SVTYPE='"\${val}" ${input_label}.manta04.vcf > ${input_label}.manta.vcf.filt.\${val}
-        done
+   sed "s|SAMTOOLS=|SAMTOOLS=\$(which samtools)|" ${params.lumpy}/bin/lumpyexpress.config > lumpyexpress.config
+   sed -i "s|PYTHON=.*|PYTHON=\$(which python)|" lumpyexpress.config
+   
+   ${params.lumpy}/bin/lumpyexpress -B ${cram} -S ${input_label}.discordant.bam -D ${input_label}.splitters.bam -o ${input_label}.lumpy.vcf -K lumpyexpress.config 
+   bgzip ${input_label}.lumpy.vcf
+   tabix -p vcf ${input_label}.lumpy.vcf.gz
    """
-}
+ }
 
 
 
 workflow {
    
-   inputFiles = Channel.fromPath(params.inputFilesSubset).map{file -> [file.getSimpleName(), file, file + ".crai"]}
-
-   inputFiles | MantaSV | FilterMantaSV 
-   inputFiles | DellySV | FilterDellySV 
+   inputFiles = Channel.fromPath(params.inputFilesSubsetFourteen).map{file -> [file.getSimpleName(), file, file + ".crai"]}
+   inputFiles | MantaSV 
+   inputFiles | DellySV 
+   inputFiles | LumpySV 
 }
-
