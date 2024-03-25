@@ -52,7 +52,7 @@ process MantaSV {
    #compression to vcf.gz 
    bcftools view ${input_label}.manta.vcf -Oz -o ${input_label}.manta.vcf.gz
    
-   #tabix indexation
+   #tabix index
    bcftools index -t ${input_label}.manta.vcf.gz
    """
 }
