@@ -90,7 +90,8 @@ process MantaSV {
    sed "s|SAMTOOLS=|SAMTOOLS=\$(which samtools)|" ${params.lumpy}/bin/lumpyexpress.config > lumpyexpress.config
    sed -i "s|PYTHON=.*|PYTHON=\$(which python)|" lumpyexpress.config
    
-   ${params.lumpy}/bin/lumpyexpress -B ${cram} -S ${input_label}.discordant.bam -D ${input_label}.splitters.bam -o ${input_label}.lumpy.vcf -K lumpyexpress.config 
+   ${params.lumpy}/bin/lumpyexpress -B ${cram} -S ${input_label}.discordant.bam -D ${input_label}.splitters.bam -o ${input_label}.vcf -K lumpyexpress.config 
+   cat ${input_label}.vcf | awk '\$1 ~ /^#/ {print \$0;next} {print \$0 | "sort -k1,1 -k2,2n"}' > ${input_label}.lumpy.vcf
    bgzip ${input_label}.lumpy.vcf
    tabix -p vcf ${input_label}.lumpy.vcf.gz
    """
