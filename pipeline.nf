@@ -4,10 +4,10 @@ process DellySV {
 // call Delly, compress and index resulting file 
    cache "lenient"
    cpus 1
-   memory {12.GB * task.attempt}
+   memory "16 GB"
    time "12h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
 
    scratch '$SLURM_TMPDIR'
 
@@ -36,7 +36,7 @@ process MantaSV {
    memory "4 GB"
    time "12h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
   
    input:
@@ -67,16 +67,45 @@ process MantaSV {
 }
 
 
+ process Smoove {
+
+   cache "lenient"
+   cpus 1
+   memory "8 GB"
+   time "8h"
+   maxRetries 2
+   errorStrategy "ignore"
+   scratch '$SLURM_TMPDIR'
+   
+   container "${params.smooveContainer}"
+   containerOptions "-B ${params.referenceDir}:/ref"
+
+   input:
+   tuple val(input_label), file(cram), file(crai)
+
+   output:
+   tuple val(input_label), path("${input_label}.smoove.vcf.gz"), path("${input_label}.smoove.vcf.gz.tbi")
+
+   publishDir "${params.result}/calls/smoove", pattern: '*.vcf.gz*', mode: 'copy'
+
+   script:
+   """
+   smoove call --outdir . --name ${input_label} --fasta /ref/Homo_sapiens.GRCh38.fa -p 1 --genotype ${cram}
+   mv ${input_label}-smoove.genotyped.vcf.gz ${input_label}.smoove.vcf.gz
+   bcftools index -t ${input_label}.smoove.vcf.gz
+
+   """
+ }
 
 
  process LumpySV {
 
    cache "lenient"
    cpus 2
-   memory {12.GB * task.attempt} 
-   time {9.hour * task.attempt} 
+   memory "22 GB"
+   time "12h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
   
 
@@ -101,7 +130,7 @@ process MantaSV {
    sed "s|SAMTOOLS=|SAMTOOLS=\$(which samtools)|" ${params.lumpy}/bin/lumpyexpress.config > lumpyexpress.config
    sed -i "s|PYTHON=.*|PYTHON=\$(which python)|" lumpyexpress.config
    
-   ${params.lumpy}/bin/lumpyexpress -B ${cram} -S ${input_label}.discordant.bam -D ${input_label}.splitters.bam -o ${input_label}.vcf -K lumpyexpress.config 
+   ${params.lumpy}/bin/lumpyexpress -B ${cram} -S ${input_label}.discordant.bam -D ${input_label}.splitters.bam -o ${input_label}.vcf -t 2 -K lumpyexpress.config 
    cat ${input_label}.vcf | awk '\$1 ~ /^#/ {print \$0;next} {print \$0 | "sort -k1,1 -k2,2n"}' > ${input_label}.lumpy.vcf
    bgzip ${input_label}.lumpy.vcf
    tabix -p vcf ${input_label}.lumpy.vcf.gz
@@ -113,10 +142,10 @@ process MantaSV {
 
    cache "lenient"
    cpus 2
-   memory {16.GB * task.attempt} 
+   memory "16 GB"
    time "4h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
 
    input:
@@ -163,10 +192,10 @@ process MantaSV {
 process BreakDancer{
    cache "lenient"
    cpus 1
-   memory {8.GB * task.attempt} 
+   memory "16 GB" 
    time "12h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
 
    
@@ -206,9 +235,9 @@ process MeltALU {
    cache "lenient"
    cpus 1
    memory "4 GB" 
-   time "12h" 
+   time "24h"
    maxRetries 2 
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }   
+   errorStrategy "ignore"   
    scratch '$SLURM_TMPDIR'
 
    input:
@@ -234,7 +263,7 @@ process MeltHERVK {
    memory "4 GB"
    time "4h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
 
 
@@ -259,9 +288,9 @@ process MeltLINE1 {
    cache "lenient"
    cpus 1
    memory "4 GB"
-   time {12.hour * task.attempt}
+   time "24h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
 
    input:
@@ -285,9 +314,9 @@ process MeltSVA {
    cache "lenient"
    cpus 1
    memory "4 GB"
-   time {4.hour * task.attempt}
+   time "8h"
    maxRetries 2
-   errorStrategy { sleep(Math.pow(2, task.attempt) * 200 as long); task.attempt <= maxRetries ? 'retry' : 'finish' }
+   errorStrategy "ignore"
    scratch '$SLURM_TMPDIR'
 
    input:
@@ -309,16 +338,17 @@ process MeltSVA {
 
 workflow {
    
-   inputFiles = Channel.fromPath(params.inputFilesSubset).map{file -> [file.getSimpleName(), file, file + ".crai"]}
+   inputFiles = Channel.fromPath(params.inputFiles).map{file -> [file.getSimpleName(), file, file + ".crai"]}
    // inputFiles = Channel.fromPath(params.inputFilesBam).map{file -> [file.getSimpleName(), file, file + ".bai"]}
                  
-   inputFiles | MantaSV 
-   inputFiles | DellySV 
-   inputFiles | LumpySV 
-   inputFiles | CNVnator
-   inputFiles | BreakDancer
-   inputFiles | MeltALU
-   inputFiles | MeltHERVK
-   inputFiles | MeltLINE1
-   inputFiles | MeltSVA
+   inputFiles | MantaSV
+   inputFiles | Smoove
+   // inputFiles | DellySV 
+   // inputFiles | LumpySV 
+   // inputFiles | CNVnator
+   // inputFiles | BreakDancer
+   // inputFiles | MeltALU
+   // inputFiles | MeltHERVK
+   // inputFiles | MeltLINE1
+   // inputFiles | MeltSVA
 }
